@@ -1,0 +1,176 @@
+#!/bin/bash
+#  Shell script for maintaining web project directories.
+#  Written by Greg Waterhouse.
+#  Created 2010-10-17.
+#
+# (c) Copyright 2012 Greg Waterhouse.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+BASEDIR=$HOME/Documents/Projects/Websites
+SITESDIR=$HOME/Sites
+
+FORCE=0 # Don't force operations by default
+MKLINK=1 # Create symbolic link in web root by default
+ARCHIVE=1 # Archive removed sites as a tarball by default
+
+show_usage() {
+	if [ ${0##*/} == "rmwebproj" ]; then
+		echo "usage: ${0##*/} [-f] project ...";
+	else
+		echo "usage: ${0##*/} [-f] [--no-link|-r] project ...";
+	fi
+	}
+
+# Function to create a new project
+# usage: create_project projectname
+create_project() {
+	PROJDIR="$BASEDIR/$1"
+	WEBLINK="$SITESDIR/$1"
+
+	# Make sure what we'll create DOESN'T exist
+	if [ -e "$PROJDIR" ]; then
+		if [ $FORCE -eq 1 ]; then
+			rm -Rf $PROJDIR/
+		else
+			echo ${0##*/}: $PROJDIR: file exists
+			exit 1
+		fi
+	fi
+	if [ -e "$WEBLINK" ]; then
+		if [ $FORCE -eq 1 ]; then
+			[ $MKLINK -eq 1 ] && rm -f $WEBLINK
+		else
+			echo ${0##*/}: $WEBLINK: file exists
+			exit 1
+		fi
+	fi
+
+	mkdir $PROJDIR
+	svnadmin create $PROJDIR/svn
+	svn mkdir -q --non-interactive file://$PROJDIR/svn/branches file://$PROJDIR/svn/tags file://$PROJDIR/svn/trunk file://$PROJDIR/svn/trunk/doc file://$PROJDIR/svn/trunk/img file://$PROJDIR/svn/trunk/res file://$PROJDIR/svn/trunk/www -m "Initialised repository with standard directories."
+	svn checkout -q --non-interactive file://$PROJDIR/svn/trunk $PROJDIR/trunk
+	[ $MKLINK -eq 1 ] && ln -s  $PROJDIR/wc/trunk/www $WEBLINK
+
+	echo "Created new web project \"$1\""
+	echo "  Repository URL: file://$PROJDIR/svn"
+	echo "  Working copy of trunk: $PROJDIR/trunk"
+	echo ""
+	echo "  Local root: $PROJDIR/trunk/www"
+	[ $MKLINK -eq 1 ] && echo "  Local URL: http://localhost/$1/"
+	echo ""
+	}
+	
+# Function to archive an existing project
+# usage: archive_project projectname
+archive_project() {
+	PROJDIR="$BASEDIR/$1"
+	WEBLINK="$SITESDIR/$1"
+	if [ -d $PROJDIR ]; then
+		if [ ! -e "$BASEDIR/$1.tar.gz" ]; then
+			[ $MKLINK -eq 1 ] && rm $SITESDIR/$1 2> /dev/null
+			cd $BASEDIR/$1
+			# The tar archive will fail if not all files are user-readable. We can fix 
+			# this by testing if such files exist, changing their permissions and creating 
+			# a script within the archive to restore.
+			#TODO: Test for files not user-readable, fix, and create script to restore.
+			tar cfz $BASEDIR/$1.tar.gz * && rm -Rf $BASEDIR/$1
+		else
+			echo ${0##*/}: $BASEDIR/$1.tar.gz: file exists
+			exit 1
+		fi
+	else
+		echo ${0##*/}: $PROJDIR: no such folder
+		exit 1
+	fi
+}
+
+# Set default action
+action="create_project"
+[ ${0##*/} == "rmwebproj" ] && action="archive_project"
+
+# Parse command-line
+if [ $# -lt 1 ]; then
+	show_usage
+	exit 1
+fi
+PROJCOUNT=0
+while [ $# -ge 1 ]; do
+	case $1 in
+		-f )
+			FORCE=1
+			;;
+		--no-link )
+			if [ $action == "create_project" ]; then
+				MKLINK=0
+			else
+				echo ${0##*/}: illegal option -- ${1%/}
+				show_usage
+				exit 1 
+			fi
+			;;
+		-r )
+			if [ $MKLINK -eq 1 ]; then
+				if [ $action == "archive_project" ]; then
+					echo ${0##*/}: illegal option -- ${1%/}
+					show_usage
+					exit 1					
+				else
+					action="archive_project"
+				fi
+			else
+				echo ${0##*/}: illegal option -- ${1%/}
+				show_usage
+				exit 1 
+			fi
+			;;
+		* )
+			thisproj=${1%/}
+			PROJNAME[$PROJCOUNT]=${thisproj// /-}
+			((PROJCOUNT++))
+			# if [ -z $PROJNAME ]; then
+			# 	PROJNAME=${1%/}
+			# else
+			# 	# We already have a project name!
+			# 	echo ${0##*/}: illegal option -- ${1%/}
+			# 	show_usage
+			# 	exit 1
+			# fi
+			;;
+	esac
+	shift
+done
+if [ -z "$PROJNAME" ]; then
+	show_usage
+	exit 1
+fi
+if [ ${PROJNAME[0]:0:1} == "-" ]; then
+	echo ${0##*/}: illegal option -- ${PROJNAME:0:1}
+	show_usage
+	exit 1
+fi
+
+# Ensure required directories DO exist
+if [ ! -d "$BASEDIR" ]; then
+	echo ${0##*/}: $BASEDIR: No such folder
+	exit 1
+fi
+if [ ! -d "$SITESDIR" ]; then
+	echo ${0##*/}: $SITESDIR: No such folder
+	exit 1
+fi
+
+# Take action on each project
+for proj in ${PROJNAME[*]}; do
+	$action "$proj"
+done

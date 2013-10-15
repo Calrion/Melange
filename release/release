@@ -1,0 +1,103 @@
+#!/bin/bash
+#  Shell script to produce a software project release.
+#  Designed for projects managed with GitHub and Xcode 4.x.
+#  Written by Greg Waterhouse.
+#  Created 2012-07-21.
+#
+# (c) Copyright 2012 Greg Waterhouse.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+BASEDIR=$PWD
+DEVELOPER_DIR="`xcode-select -print-path 2> /dev/null`"
+RESPONSE=$?
+if [ $RESPONSE -ne 0 ]; then
+	if [ $RESPONSE -eq 2 ]; then
+		echo "${0##*/}: Error: No Xcode is selected. Use xcode-select -switch <path-to-xcode>, or see the xcode-select manpage (man xcode-select) for further information."; exit 1
+	fi
+        echo "${0##*/}: error: Could not locate Xcode installation."; exit 1
+fi
+TMP_PREFIX="${TMPDIR}org.calrion.sh.release/"
+OURTMP="${TMP_PREFIX}`uuidgen`"
+OURTMP="${OURTMP/$'\n'/}"
+PLISTBUDDY=/usr/libexec/PlistBuddy
+GIT=`xcrun -find git 2> /dev/null`
+RESPONSE=$?
+if [ $RESPONSE -ne 0 ]; then
+	if [ $RESPONSE -eq 69 ]; then
+		echo "${0##*/}: Error: Xcode license not accepted. Run xcodebuild -license to accept."; exit 1
+	fi
+	echo "${0##*/}: Error: Could not locate Git binary."; exit 1
+fi
+XCBUILD=/usr/bin/xcodebuild
+XCTYPE=`$PLISTBUDDY -c "Print :CFBundleIconFile" $DEVELOPER_DIR/../Info.plist`
+XCTYPE=${XCTYPE/$'\n'/}
+if [ ! "$XCTYPE" = "Xcode" ]; then
+	echo "${0##*/}: $DEVELOPER_DIR: Warning: The currently-selected Xcode may be a preview release."
+fi
+XCVERSION=`$PLISTBUDDY -c "Print :CFBundleShortVersionString" $DEVELOPER_DIR/../Info.plist`
+GITHUB_USER=`$GIT config --get github.name`
+if [ $? -ne 0 ]; then
+	echo "${0##*/}: warning: GitHub username not in Git config. Run git config --global github.name <Username> to set."
+	GITHUB_USER=$USER
+fi
+PROJECT_NAME=$1
+RELEASE_TYPE=$2
+PROJECT_URL="ssh://git@github.com/${GITHUB_USER}/$PROJECT_NAME.git"
+
+echo ""
+MASTHEAD="Making a $RELEASE_TYPE release of $PROJECT_NAME"
+echo "${MASTHEAD}"
+head -c ${#MASTHEAD} < /dev/zero | tr "\0" "="; echo ""
+echo ""
+echo "Xcode v$XCVERSION."
+echo "`$GIT --version`."
+echo "Clone URL: $PROJECT_URL"
+#echo "Temp folder: \"$OURTMP\"."
+echo 
+
+# Work in temp folder
+mkdir -p $OURTMP
+cd $OURTMP
+if [ ! $PWD == $OURTMP ]; then
+	echo "${0##*/}: error: switching to temp folder failed."; exit 1
+fi
+
+# Clone and initialise repository
+echo "** STARTING GIT CLONE **"
+echo ""
+$GIT clone -b "development" --recurse-submodules "$PROJECT_URL" "$OURTMP/$PROJECT_NAME"
+if [ $? -ne 0 ]; then
+	echo "${0##*/}: error: cloning repository failed."; exit 1
+else
+	echo ""
+	echo "** CLONE SUCCEEDED **"
+	echo ""
+fi
+cd "$OURTMP/$PROJECT_NAME"
+
+# Build our app
+$XCBUILD -workspace "Project/Release.xcworkspace" -scheme "$2 Release" CN_RELEASE_SCRIPT=1 CN_RELEASE_BASEDIR=${OURTMP} -IDEBuildLocationStyle=Custom -IDECustomBuildLocationType=RelativeToWorkspace -IDECustomBuildIntermediatesPath="build/Intermediates" -IDECustomBuildProductsPath="build/Products" -showBuildSettings &> "${OURTMP}/BuildSettings.log"
+$XCBUILD -workspace "Project/Release.xcworkspace" -scheme "$2 Release" CN_RELEASE_SCRIPT=1 CN_RELEASE_BASEDIR=${OURTMP} -IDEBuildLocationStyle=Custom -IDECustomBuildLocationType=RelativeToWorkspace -IDECustomBuildIntermediatesPath="build/Intermediates" -IDECustomBuildProductsPath="build/Products" archive > "${OURTMP}/Build.log" 2>&1
+XCBUILD_RESPONSE=$?
+egrep -e "(?:warning|error): " "${OURTMP}/Build.log"
+if [ $? -eq 0 ]; then
+	tput bel
+fi
+if [ $XCBUILD_RESPONSE -ne 0 ]; then
+	echo "${0##*/}: error: build failed."; exit 1
+else
+	echo ""
+	echo "** ARCHIVE SUCCEEDED **"
+	echo ""
+fi

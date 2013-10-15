@@ -1,0 +1,259 @@
+#!/bin/bash
+#  Shell script for encrypting and signing iOS configuration profiles.
+#  Written by Greg Waterhouse.
+#  Created 2012-04-21.
+#
+# (c) Copyright 2012 Greg Waterhouse.
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+BASEDIR=$PWD
+OURTMP="$TMPDIR/profilesign"
+PLISTBUDDY=/usr/libexec/PlistBuddy
+OPENSSL=/usr/bin/openssl
+SED=/usr/bin/sed
+
+
+# Since it's assumed you'll generally want to sign profiles
+# with the same certificate each time, they're set here
+# rather than cluttering the command-line.
+SIGNING_CERT=${SIGNING_CERT-$HOME/.profilesign/signing-cert.pem}
+SIGNING_KEY=${SIGNING_KEY-$HOME/.profilesign/signing-key.pem}
+
+FORCE=0 # Don't force operations by default
+
+show_usage() {
+	# Uncomment to change usage display based on 
+	# the filename (or symlink to) the script
+	# if [ ${0##*/} == "scriptname" ]; then
+	# 	echo "usage: ${0##*/} [-f] [--no-sign] config_profile.mobileconfig [device-cert.cer]";
+	# else
+	echo "usage: ${0##*/} [-f] [--no-sign] config_profile.mobileconfig [device-cert.cer]";
+	# fi
+	}
+
+# Function called whenever we exit, even on error
+# Use this to perform any actions needed 
+# before exiting.
+# The first argument is passed to the parent shell 
+# as the exit code.
+cleanup() {
+	rm -Rf $OURTMP/
+	# Default to a 0 exit code.
+	[ $1 != "" ] && exit $1 || exit 0
+}
+
+
+# Function to sign a profile
+# usage: profile_sign profile cert dummy key
+profile_sign() {
+	OUTFILE="$4"
+	if [ -e "$OUTFILE" ]; then
+		if [ $FORCE -eq 1 ]; then
+			echo ${0##*/}: warning: existing file $OUTFILE will be overwritten.
+			rm "$OUTFILE"
+			if [ $? -ne 0 ]; then
+				echo ${0##*/}: error deleting existing file.
+				cleanup $?
+			fi
+		else
+			echo ${0##*/}: file $OUTFILE exists.
+			cleanup 1
+		fi
+	fi
+	$OPENSSL smime -sign -nodetach -outform der -signer "$2" -inkey "$3" -in "$1" -out "$OUTFILE"
+	if [ ! -s "$OUTFILE" ]; then
+		echo "${0##*/}: error signing profile."
+		cleanup 1
+	fi
+}
+
+
+# Function to encrypt (but NOT SIGN) a profile
+# usage: profile_encrypt profile cert
+# 'cert' needs to be a certificate for which the device
+# you're deploying the profile to has the corresponding
+# private key. It is recommended that this be a 
+# certificate you have previously deployed to the device.
+profile_encrypt() {
+	PAYLOAD="$OURTMP/PayloadContent.plist"
+	ENCRYPTED_PAYLOAD="$OURTMP/EncryptedPayloadContent.der"
+	OUTFILE="$3"
+	
+	if [ -e "$OUTFILE" ]; then
+		if [ $FORCE -eq 1 ]; then
+			echo ${0##*/}: warning: existing file $OUTFILE will be overwritten.
+			rm "$OUTFILE"
+			if [ $? -ne 0 ]; then
+				echo ${0##*/}: error deleting existing file.
+				cleanup $?
+			fi
+		else
+			echo ${0##*/}: file $OUTFILE exists.
+			cleanup 1
+		fi
+	fi
+	
+	$PLISTBUDDY -x -c "Print :PayloadContent" "$1" > "$PAYLOAD"
+	if [ ! -s "$PAYLOAD" ]; then
+		echo "${0##*/}: error extracting profile payload for encryption."
+		cleanup 1
+	fi
+	$OPENSSL smime -encrypt -aes128 -nodetach -binary -outform der -in "$PAYLOAD" -out "$ENCRYPTED_PAYLOAD" "$2"
+	if [ ! -s "$ENCRYPTED_PAYLOAD" ]; then
+		echo "${0##*/}: error encrypting profile."
+		cleanup 1
+	fi
+	cp "$1" "$OUTFILE"
+	if [ ! -s "$OUTFILE" ]; then
+		echo "${0##*/}: error creating output file."
+		cleanup 1
+	fi
+	$PLISTBUDDY -x -c "Delete :PayloadContent" "$OUTFILE"
+	if [ $? -ne 0 ]; then
+		echo "${0##*/}: error writing output file."
+		cleanup 1
+	fi
+	$PLISTBUDDY -x -c "Import :EncryptedPayloadContent $ENCRYPTED_PAYLOAD" "$OUTFILE"
+	if [ $? -ne 0 ]; then
+		echo "${0##*/}: error writing encrypted output file."
+		cleanup 1
+	fi
+}
+
+
+# Function to sign and encrypt a profile
+# Wrapper for profile_sign and profile_encrypt
+# usage: profile_sign_encrypt profile device_cert signing_cert key
+profile_do_sign_encrypt() {
+	BN_PROFILE="${1##*/}"
+	BN_CERT="${2##*/}"
+	FILE_ENCOUT="${BN_CERT%.*}-$BN_PROFILE"
+	ENCOUT="$OURTMP/$FILE_ENCOUT"
+	
+	profile_encrypt "$1" "$2" "$ENCOUT"
+	[ $? -eq 0 ] || cleanup $?
+	profile_sign "$ENCOUT" "$3" "$4" "$BASEDIR/signed-$FILE_ENCOUT"
+}
+
+
+# Function to sign a profile
+# Wrapper for profile_sign
+# usage: profile_do_sign profile device_cert signing_cert key
+# NOTE: device_cert is unused.
+profile_do_sign() {
+	BN_PROFILE="${1##*/}"
+	profile_sign "$1" "$3" "$4" "$BASEDIR/signed-$BN_PROFILE"
+}
+
+
+# Function to encrypt a profile
+# Wrapper for profile_encrypt
+# usage: profile_do_encrypt profile device_cert signing_cert key
+# NOTE: signing_cert and key are unused.
+profile_do_encrypt() {
+	BN_PROFILE="${1##*/}"
+	BN_CERT="${2##*/}"
+	FILE_ENCOUT="${2%.*}-$BN_PROFILE"
+	
+	profile_encrypt "$1" "$2" "$BASEDIR/$FILE_ENCOUT"
+}
+
+
+# Set default action
+action="sign_encrypt"
+# Uncomment to change action based on invocation name
+# [ ${0##*/} == "scriptname" ] && action="something_else"
+
+# Parse command-line
+if [ $# -lt 1 ]; then
+	show_usage
+	cleanup 1
+fi
+
+while [ $# -ge 1 ]; do
+	case $1 in
+		-f )
+			FORCE=1
+			;;
+		--no-sign )
+			if [ $action == "sign" ]; then
+				echo ${0##*/}: illegal option -- ${1%/}
+				show_usage
+				cleanup 1 
+			else
+				action="encrypt"
+			fi
+			;;
+		* )
+			if [ -z $PROFILE ]; then
+				PROFILE=${1%/}
+			else
+				# We already have a profile name
+				# so this should be an encryption cert
+				if [ -z $ENCCERT ]; then
+					ENCCERT=${1%/}
+				else
+					echo ${0##*/}: illegal option -- ${1%/}
+					show_usage
+					cleanup 1
+				fi
+			fi
+			;;
+	esac
+	shift
+done
+if [ -z "$PROFILE" ]; then
+	show_usage
+	cleanup 1
+fi
+if [ -z "$ENCCERT" ]; then
+	if [ $action == "encrypt" ]; then
+		echo ${0##*/}: illegal option -- ${1%/}
+		show_usage
+		cleanup 1 
+	else
+		action="sign"
+	fi
+fi
+if [ ${PROFILE:0:1} == "-" ]; then
+	echo ${0##*/}: illegal option -- ${PROFILE:0:1}
+	show_usage
+	cleanup 1
+fi
+
+# Ensure required directories DO exist
+if [ ! -d "$BASEDIR" ]; then
+	echo ${0##*/}: $BASEDIR: No such directory
+	cleanup 1
+fi
+
+# Make sure our temp folder DOESN'T exist
+if [ -e "$OURTMP" ]; then
+	if [ $FORCE -eq 1 ]; then
+		echo ${0##*/}: warning: removing existing folder \"$OURTMP\".
+		rm -Rf $OURTMP/
+		[ $? -eq 0 ] || cleanup $?
+	else
+		echo ${0##*/}: $OURTMP: folder exists
+		cleanup 1
+	fi
+fi
+# ...and then create it fresh
+mkdir -p "$OURTMP"
+[ $? -eq 0 ] || cleanup $?
+
+
+# Let's do this!
+profile_do_$action "$PROFILE" "$ENCCERT" "$SIGNING_CERT" "$SIGNING_KEY"
+cleanup 0
