@@ -88,7 +88,13 @@ fi
 cd "$OURTMP/$PROJECT_NAME"
 
 # Build our app
-$XCBUILD -workspace "Project/Release.xcworkspace" -scheme "$2 Release" CN_RELEASE_SCRIPT=1 CN_RELEASE_BASEDIR=${OURTMP} -IDEBuildLocationStyle=Custom -IDECustomBuildLocationType=RelativeToWorkspace -IDECustomBuildIntermediatesPath="build/Intermediates" -IDECustomBuildProductsPath="build/Products" -showBuildSettings &> "${OURTMP}/BuildSettings.log"
+if [ ${XCVERSION:0:1} -ge 5 ]; then
+	# Xcode 5.0 or later requires action to emit build settings
+	BUILD_SETTINGS_CMD="-showBuildSettings archive"
+else
+	BUILD_SETTINGS_CMD="-showBuildSettings"
+fi
+$XCBUILD -workspace "Project/Release.xcworkspace" -scheme "$2 Release" CN_RELEASE_SCRIPT=1 CN_RELEASE_BASEDIR=${OURTMP} -IDEBuildLocationStyle=Custom -IDECustomBuildLocationType=RelativeToWorkspace -IDECustomBuildIntermediatesPath="build/Intermediates" -IDECustomBuildProductsPath="build/Products" $BUILD_SETTINGS_CMD &> "${OURTMP}/BuildSettings.log"
 $XCBUILD -workspace "Project/Release.xcworkspace" -scheme "$2 Release" CN_RELEASE_SCRIPT=1 CN_RELEASE_BASEDIR=${OURTMP} -IDEBuildLocationStyle=Custom -IDECustomBuildLocationType=RelativeToWorkspace -IDECustomBuildIntermediatesPath="build/Intermediates" -IDECustomBuildProductsPath="build/Products" archive > "${OURTMP}/Build.log" 2>&1
 XCBUILD_RESPONSE=$?
 egrep -e "(?:warning|error): " "${OURTMP}/Build.log"
