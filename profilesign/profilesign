@@ -23,11 +23,16 @@ OURTMP="$TMPDIR/profilesign"
 PLISTBUDDY=/usr/libexec/PlistBuddy
 OPENSSL=/usr/bin/openssl
 SED=/usr/bin/sed
+USE_KEYCHAIN=1
 
+# Enter the name of the certificate as it appears in the 
+# listing in Keychain.
+KEYCHAIN_CERT_NICK="iOS Profile Signer"
 
 # Since it's assumed you'll generally want to sign profiles
 # with the same certificate each time, they're set here
-# rather than cluttering the command-line.
+# rather than cluttering the command-line. These values are 
+# not used if signing with the OS X Keychain.
 SIGNING_CERT=${SIGNING_CERT-$HOME/.profilesign/signing-cert.pem}
 SIGNING_KEY=${SIGNING_KEY-$HOME/.profilesign/signing-key.pem}
 
@@ -72,7 +77,11 @@ profile_sign() {
 			cleanup 1
 		fi
 	fi
-	$OPENSSL smime -sign -nodetach -outform der -signer "$2" -inkey "$3" -in "$1" -out "$OUTFILE"
+	if [ $USE_KEYCHAIN -eq 1 ]; then
+		security cms -S -N "$KEYCHAIN_CERT_NICK" -i "$1" > "$OUTFILE"
+	else
+		$OPENSSL smime -sign -nodetach -outform der -signer "$2" -inkey "$3" -in "$1" -out "$OUTFILE"
+	fi
 	if [ ! -s "$OUTFILE" ]; then
 		echo "${0##*/}: error signing profile."
 		cleanup 1
