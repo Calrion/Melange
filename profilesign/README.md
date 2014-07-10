@@ -71,9 +71,7 @@ directly, rather than needing the certificate exported.
 Yes, but it likely won't be trusted by the devices you deploy to, and 
 you'll get a big red "unverified" when installing. A better idea is to 
 obtain a certificate from a CA that has its [root certificates included in 
-iOS](http://support.apple.com/kb/HT5012); StartCom Ltd is one such CA, and 
-they offer [free low-assurance certificates](https://www.startssl.com). 
-(That's just a link, not an endorsement!)
+iOS](http://support.apple.com/kb/HT5012).
 
 ### What's the difference between 'verified' and 'unverified'?
 When an iOS device receives a signed profile, it checks to see if the 
